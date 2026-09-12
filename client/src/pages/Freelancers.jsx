@@ -1,6 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { FREELANCERS, CATEGORIES } from '../data/mockData';
+import { api } from '../lib/api';
 import { FreelancerCard } from '../components/marketplace/FreelancerCard';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Skeleton } from '../components/ui/Skeleton';
@@ -21,15 +21,28 @@ export const Freelancers = () => {
   const [availabilityFilter, setAvailabilityFilter] = useState('all');
   const [sortBy, setSortBy] = useState('rating');
   const [currentPage, setCurrentPage] = useState(1);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [freelancers, setFreelancers] = useState([]);
+  const [categories, setCategories] = useState([]);
 
   const ITEMS_PER_PAGE = 8;
 
+  useEffect(() => {
+    let active = true;
+    Promise.all([api.get('/freelancers?limit=50'), api.get('/categories')])
+      .then(([freelancerResponse, categoryResponse]) => {
+        if (!active) return;
+        setFreelancers(freelancerResponse.data || []);
+        setCategories(categoryResponse.data.categories || []);
+      })
+      .catch(() => { if (active) setFreelancers([]); })
+      .finally(() => { if (active) setIsLoading(false); });
+    return () => { active = false; };
+  }, []);
+
   const handleFilterChange = (setter, val) => {
-    setIsLoading(true);
     setter(val);
     setCurrentPage(1);
-    setTimeout(() => setIsLoading(false), 200);
   };
 
   const handleReset = () => {
@@ -43,7 +56,7 @@ export const Freelancers = () => {
 
   // Filter & Sort
   const filteredFreelancers = useMemo(() => {
-    return FREELANCERS.filter((f) => {
+    return freelancers.filter((f) => {
       // Search
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -59,13 +72,14 @@ export const Freelancers = () => {
       if (availabilityFilter === 'available' && f.availability !== 'Available Now') return false;
       // Category / Skill match
       if (selectedCategory !== 'all') {
-        const catObj = CATEGORIES.find((c) => c.id === selectedCategory);
+        const catObj = categories.find((c) => (c.slug || c.id || c._id) === selectedCategory);
         if (catObj) {
           const catNameLower = catObj.name.toLowerCase();
+          const matchCategory = f.serviceCategories?.includes(catObj.slug);
           const matchTitleOrSkill =
             f.title.toLowerCase().includes(catNameLower.slice(0, 4)) ||
             f.skills.some((s) => s.toLowerCase().includes(catNameLower.slice(0, 4)));
-          if (!matchTitleOrSkill) return false;
+          if (!matchCategory && !matchTitleOrSkill) return false;
         }
       }
       return true;
@@ -76,7 +90,7 @@ export const Freelancers = () => {
       if (sortBy === 'success') return b.jobSuccess - a.jobSuccess;
       return b.rating - a.rating; // default: top rated
     });
-  }, [searchQuery, selectedCategory, maxRate, availabilityFilter, sortBy]);
+  }, [freelancers, categories, searchQuery, selectedCategory, maxRate, availabilityFilter, sortBy]);
 
   const totalPages = Math.ceil(filteredFreelancers.length / ITEMS_PER_PAGE) || 1;
   const paginatedFreelancers = filteredFreelancers.slice(
@@ -142,7 +156,7 @@ export const Freelancers = () => {
                 onChange={(e) => handleFilterChange(setSelectedCategory, e.target.value)}
                 options={[
                   { value: 'all', label: 'All Specializations' },
-                  ...CATEGORIES.map((c) => ({ value: c.id, label: c.name })),
+                  ...categories.map((c) => ({ value: c.slug || c.id || c._id, label: c.name })),
                 ]}
               />
             </div>
@@ -247,9 +261,9 @@ export const Freelancers = () => {
         ) : filteredFreelancers.length === 0 ? (
           <EmptyState
             icon={Filter}
-            title="No talent matches your filters"
-            description="Try loosening your search keywords, adjusting the hourly rate range, or resetting filters."
-            actionLabel="Reset All Filters"
+            title="No users found in this category"
+            description="No freelancers match the selected category and filters. Try a different category or reset the filters."
+            actionText="Reset All Filters"
             onAction={handleReset}
           />
         ) : (

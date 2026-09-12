@@ -1,0 +1,1 @@
+import { ApiError } from '../utils/api.js'; export const validate=schema=>(req,res,next)=>{const r=schema.safeParse({body:req.body,query:req.query,params:req.params});if(!r.success)return next(new ApiError(400,r.error.issues.map(i=>i.message).join(', ')));req.validated=r.data;next();};

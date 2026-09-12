@@ -1,0 +1,3 @@
+export const calculateSplit=(totalAmount,rate=.10)=>{const platformFee=Number((totalAmount*rate).toFixed(2));return {platformFee,freelancerAmount:Number((totalAmount-platformFee).toFixed(2))};};
+export const transitions={pending:{accepted:'awaiting_payment',rejected:'rejected',cancelled:'cancelled'},awaiting_payment:{paid:'active',cancelled:'cancelled'},active:{deliver:'delivered',cancelled:'cancelled',dispute:'disputed'},delivered:{revision:'revision_requested',complete:'completed',dispute:'disputed'},revision_requested:{deliver:'delivered',cancelled:'cancelled'},disputed:{resolve:'active'}};
+export const nextStatus=(status,action)=>transitions[status]?.[action]||null;

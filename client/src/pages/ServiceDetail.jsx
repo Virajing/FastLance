@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { SERVICES, FREELANCERS } from '../data/mockData';
+import { api } from '../lib/api';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
@@ -34,9 +34,12 @@ export const ServiceDetail = () => {
   const [selectedPackageData, setSelectedPackageData] = useState(null);
   const [isSaved, setIsSaved] = useState(false);
 
-  const service = SERVICES.find((s) => s.id === id) || SERVICES[0];
-  const freelancer = FREELANCERS.find((f) => f.id === service.freelancerId) || FREELANCERS[0];
-  const similarServices = SERVICES.filter((s) => s.id !== service.id && s.category === service.category).slice(0, 3);
+  const [service, setService] = useState(null);
+  const [freelancer, setFreelancer] = useState(null);
+  const [similarServices, setSimilarServices] = useState([]);
+  useEffect(() => { api.get(`/services/${id}`).then((r) => { setService(r.data.service); return api.get(`/freelancers/${r.data.service.freelancerId}`); }).then((r) => setFreelancer(r.data.freelancer)).catch(() => { setService(null); setFreelancer(null); }); }, [id]);
+  useEffect(() => { if (service?.category) api.get(`/services?category=${service.category}&limit=4`).then((r) => setSimilarServices(r.data.filter((x) => x.id !== service.id).slice(0, 3))).catch(() => {}); }, [service]);
+  if (!service || !freelancer) return <div className="max-w-7xl mx-auto px-4 py-16 text-center text-sm text-slate-500">Loading service…</div>;
 
   const handleOpenHireModal = (tierKey, pkgData) => {
     setSelectedTierKey(tierKey);

@@ -19,7 +19,7 @@ export const Register = () => {
   const { addToast } = useToast();
   const navigate = useNavigate();
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!name.trim() || !email.trim() || !password) {
       addToast('Please fill out all required fields.', 'warning');
@@ -32,16 +32,17 @@ export const Register = () => {
     }
 
     setIsLoading(true);
-    setTimeout(() => {
-      register({
+    try {
+      await register({
         name,
         email,
         role,
+        password
       });
       setIsLoading(false);
       addToast(`Welcome to FastLance, ${name}! Your account is ready.`, 'success');
       navigate('/dashboard');
-    }, 900);
+    } catch (error) { setIsLoading(false); addToast(error.message, 'error'); }
   };
 
   return (

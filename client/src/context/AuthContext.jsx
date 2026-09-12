@@ -1,86 +1,47 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { api, setAccessToken } from '../lib/api';
 
 const AuthContext = createContext(null);
 
-const DEFAULT_USER = {
-  id: 'usr-client-1',
-  name: 'Julian Thorne',
-  email: 'julian@hyperscale.ai',
-  role: 'client', // 'client' or 'freelancer'
-  avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80',
-  headline: 'Founder & CEO at HyperScale AI',
-  company: 'HyperScale AI',
-  location: 'San Francisco, CA',
-  bio: 'Building enterprise autonomous agent infrastructure. Looking for senior fullstack engineers and product designers.',
-  website: 'https://hyperscale.ai',
-  skills: ['Product Strategy', 'AI Agents', 'Venture Capital', 'Fullstack Hiring'],
-  balance: 14250,
-  notificationsEnabled: true,
-  emailUpdates: true
-};
-
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('fastlance_user');
-    return saved ? JSON.parse(saved) : DEFAULT_USER;
-  });
-
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
-    localStorage.setItem('fastlance_user', JSON.stringify(user));
-  }, [user]);
+    api.post('/auth/refresh').then((r) => { setAccessToken(r.data.accessToken); return api.get('/auth/me'); }).then((r) => setUser(r.data.user)).catch(() => setUser(null)).finally(() => setLoading(false));
+  }, []);
 
-  const login = (email, password) => {
-    // Mock login
-    const newUser = {
-      ...DEFAULT_USER,
-      email: email || DEFAULT_USER.email,
-      name: email ? email.split('@')[0] : DEFAULT_USER.name
-    };
-    setUser(newUser);
-    return newUser;
+  const login = async (email, password) => {
+    const result = await api.post('/auth/login', { email, password });
+    setAccessToken(result.data.accessToken);
+    setUser(result.data.user);
+    return result.data.user;
   };
 
-  const register = ({ name, email, role }) => {
-    const newUser = {
-      ...DEFAULT_USER,
-      id: 'usr-' + Date.now(),
-      name,
-      email,
-      role: role || 'client'
-    };
-    setUser(newUser);
-    return newUser;
+  const register = async (data) => {
+    const result = await api.post('/auth/register', data);
+    setAccessToken(result.data.accessToken);
+    setUser(result.data.user);
+    return result.data.user;
   };
 
-  const logout = () => {
-    // Reset to demo client or null
+  const logout = async () => {
+    await api.post('/auth/logout').catch(() => {});
+    setAccessToken(null);
     setUser(null);
   };
 
-  const switchRole = () => {
-    setUser((prev) => {
-      if (!prev) return DEFAULT_USER;
-      const nextRole = prev.role === 'client' ? 'freelancer' : 'client';
-      return {
-        ...prev,
-        role: nextRole,
-        name: nextRole === 'freelancer' ? 'Elena Rostova' : 'Julian Thorne',
-        headline: nextRole === 'freelancer' ? 'Senior Fullstack & AI Engineer' : 'Founder & CEO at HyperScale AI',
-        avatar: nextRole === 'freelancer'
-          ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&auto=format&fit=crop&q=80'
-          : 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80'
-      };
-    });
-  };
-
-  const updateProfile = (updates) => {
-    setUser((prev) => ({ ...prev, ...updates }));
+  const switchRole = () => {};
+  const updateProfile = async (updates) => {
+    const result = await api.patch('/auth/me', updates);
+    setUser(result.data.user);
+    return result.data.user;
   };
 
   return (
     <AuthContext.Provider
       value={{
         user,
+        loading,
         isAuthenticated: !!user,
         login,
         register,

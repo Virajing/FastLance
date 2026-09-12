@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DASHBOARD_STATS, PROJECTS, FREELANCERS, NOTIFICATIONS } from '../../data/mockData';
+import { DASHBOARD_STATS, PROJECTS, NOTIFICATIONS } from '../../data/mockData';
+import { api } from '../../lib/api';
 import { StatCard } from '../../components/ui/StatCard';
 import { ActiveProjectsTable } from '../../components/dashboard/ActiveProjectsTable';
 import { SpendingChart } from '../../components/dashboard/SpendingChart';
@@ -10,6 +11,7 @@ import Card from '../../components/ui/Card';
 import Avatar from '../../components/ui/Avatar';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
+import Skeleton from '../../components/ui/Skeleton';
 import {
   DollarSign,
   Briefcase,
@@ -29,8 +31,25 @@ export const DashboardOverview = () => {
   const { user, switchRole } = useAuth();
   const navigate = useNavigate();
   const [selectedProject, setSelectedProject] = useState(null);
+  const [recommendedFreelancers, setRecommendedFreelancers] = useState([]);
+  const [isTalentLoading, setIsTalentLoading] = useState(true);
 
   const isClient = user?.role === 'client';
+
+  useEffect(() => {
+    let active = true;
+
+    Promise.all([
+      api.get('/freelancers?limit=3').catch(() => ({ data: [] })),
+      new Promise((resolve) => setTimeout(resolve, 5000))
+    ]).then(([response]) => {
+      if (!active) return;
+      setRecommendedFreelancers(response.data || []);
+      setIsTalentLoading(false);
+    });
+
+    return () => { active = false; };
+  }, []);
 
   return (
     <div className="space-y-8">
@@ -161,7 +180,23 @@ export const DashboardOverview = () => {
             </div>
 
             <div className="space-y-3">
-              {FREELANCERS.slice(0, 3).map((f) => (
+              {isTalentLoading ? (
+                Array.from({ length: 3 }).map((_, index) => (
+                  <div key={index} className="neu-sm rounded-xl p-3 border border-white/80 flex items-center gap-3">
+                    <Skeleton variant="circle" width="40px" height="40px" />
+                    <div className="flex-1 space-y-2">
+                      <Skeleton variant="text" className="w-2/3 h-3" />
+                      <Skeleton variant="text" className="w-full h-2.5" />
+                      <Skeleton variant="text" className="w-1/2 h-2.5" />
+                    </div>
+                  </div>
+                ))
+              ) : recommendedFreelancers.length === 0 ? (
+                <div className="neu-inset rounded-xl px-4 py-6 text-center">
+                  <p className="text-xs font-semibold text-slate-700">No talent found</p>
+                  <p className="mt-1 text-[11px] text-slate-500">There are no freelancers available for this category right now.</p>
+                </div>
+              ) : recommendedFreelancers.map((f) => (
                 <div
                   key={f.id}
                   onClick={() => navigate(`/freelancers/${f.id}`)}

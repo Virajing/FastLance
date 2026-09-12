@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { FREELANCERS, SERVICES } from '../data/mockData';
+import { api } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import Card from '../components/ui/Card';
 import Avatar from '../components/ui/Avatar';
@@ -34,15 +34,17 @@ export const FreelancerProfile = () => {
   const navigate = useNavigate();
   const { addToast } = useToast();
 
-  const freelancer = FREELANCERS.find((f) => f.id === id) || FREELANCERS[0];
-  const freelancerServices = SERVICES.filter((s) => s.freelancerId === freelancer.id);
-
+  const [freelancer, setFreelancer] = useState(null);
+  useEffect(() => { api.get(`/freelancers/${id}`).then((r) => setFreelancer(r.data.freelancer)).catch(() => setFreelancer(null)); }, [id]);
   const [selectedPortfolioItem, setSelectedPortfolioItem] = useState(null);
   const [isHireModalOpen, setIsHireModalOpen] = useState(false);
   const [contractTitle, setContractTitle] = useState('');
   const [contractHours, setContractHours] = useState('20');
   const [contractNotes, setContractNotes] = useState('');
   const [isSubmittingContract, setIsSubmittingContract] = useState(false);
+
+  if (!freelancer) return <div className="max-w-7xl mx-auto px-4 py-16 text-center text-sm text-slate-500">Loading profile…</div>;
+  const freelancerServices = freelancer.services || [];
 
   const handleShare = () => {
     navigator.clipboard?.writeText(window.location.href);

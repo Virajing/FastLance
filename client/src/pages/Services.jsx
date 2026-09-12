@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { SERVICES, CATEGORIES } from '../data/mockData';
+import { CATEGORIES } from '../data/mockData';
+import { api } from '../lib/api';
 import { ServiceCard } from '../components/marketplace/ServiceCard';
 import { FilterBar } from '../components/marketplace/FilterBar';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -20,6 +21,8 @@ export const Services = () => {
   const [minRating, setMinRating] = useState('0');
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
+  const [services, setServices] = useState([]);
+  const [categories, setCategories] = useState(CATEGORIES);
 
   const ITEMS_PER_PAGE = 8;
 
@@ -28,6 +31,12 @@ export const Services = () => {
     if (queryCategory) setCategory(queryCategory);
     if (querySearch) setSearchQuery(querySearch);
   }, [queryCategory, querySearch]);
+
+  useEffect(() => {
+    const params = new URLSearchParams({ page: String(currentPage), limit: String(ITEMS_PER_PAGE), ...(category !== 'all' ? { category } : {}), ...(searchQuery ? { q: searchQuery } : {}), ...(maxPrice < 2000 ? { maxPrice: String(maxPrice) } : {}), ...(Number(minRating) ? { minRating } : {}), ...(sortBy !== 'featured' ? { sort: sortBy === 'price-low' ? 'price' : sortBy } : {}) });
+    setIsLoading(true);
+    Promise.all([api.get(`/services?${params}`), api.get('/categories')]).then(([s, c]) => { setServices(s.data); setCategories(c.data.categories); }).catch(() => setServices([])).finally(() => setIsLoading(false));
+  }, [category, searchQuery, sortBy, maxPrice, minRating, currentPage]);
 
   // Simulate quick filtering transition
   const handleFilterChange = (setter, val) => {
@@ -38,7 +47,7 @@ export const Services = () => {
   };
 
   const filteredServices = useMemo(() => {
-    return SERVICES.filter((s) => {
+    return services.filter((s) => {
       // Category match
       if (category !== 'all' && s.category !== category) return false;
       // Search match
@@ -62,7 +71,7 @@ export const Services = () => {
       if (sortBy === 'rating') return b.rating - a.rating;
       return 0; // featured default
     });
-  }, [category, searchQuery, sortBy, maxPrice, minRating]);
+  }, [services, category, searchQuery, sortBy, maxPrice, minRating]);
 
   // Pagination slice
   const totalPages = Math.ceil(filteredServices.length / ITEMS_PER_PAGE) || 1;
@@ -105,7 +114,7 @@ export const Services = () => {
           handleFilterChange(setCategory, val);
           setSearchParams(val === 'all' ? {} : { cat: val });
         }}
-        categories={CATEGORIES}
+        categories={categories}
         sortBy={sortBy}
         onSortChange={(val) => handleFilterChange(setSortBy, val)}
         maxPrice={maxPrice}

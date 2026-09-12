@@ -13,11 +13,11 @@ export const Login = () => {
   const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
 
-  const { login, updateProfile } = useAuth();
+  const { login } = useAuth();
   const { addToast } = useToast();
   const navigate = useNavigate();
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!email || !password) {
       addToast('Please enter both email and password.', 'warning');
@@ -25,39 +25,22 @@ export const Login = () => {
     }
 
     setIsLoading(true);
-    setTimeout(() => {
-      login(email, password);
+    try {
+      await login(email, password);
       setIsLoading(false);
       addToast('Welcome back! Successfully authenticated.', 'success');
       navigate('/dashboard');
-    }, 800);
+    } catch (error) { setIsLoading(false); addToast(error.message, 'error'); }
   };
 
-  const handleQuickDemo = (role) => {
+  const handleQuickDemo = async (role) => {
     setIsLoading(true);
-    setTimeout(() => {
-      if (role === 'client') {
-        login('julian@hyperscale.ai', 'password123');
-        updateProfile({
-          role: 'client',
-          name: 'Julian Thorne',
-          headline: 'Founder & CEO at HyperScale AI',
-          avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80'
-        });
-        addToast('Signed in as Demo Client (Julian Thorne)', 'info');
-      } else {
-        login('elena@fastlance.dev', 'password123');
-        updateProfile({
-          role: 'freelancer',
-          name: 'Elena Rostova',
-          headline: 'Senior Fullstack & AI Engineer',
-          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&auto=format&fit=crop&q=80'
-        });
-        addToast('Signed in as Demo Freelancer (Elena Rostova)', 'info');
-      }
+    try {
+      await login(role === 'client' ? 'julian@fastlance.demo' : 'elena@fastlance.demo', 'DemoPass123!');
+      addToast(`Signed in as Demo ${role === 'client' ? 'Client' : 'Talent'}`, 'info');
       setIsLoading(false);
       navigate('/dashboard');
-    }, 500);
+    } catch (error) { setIsLoading(false); addToast(`Seed demo accounts first: ${error.message}`, 'error'); }
   };
 
   return (

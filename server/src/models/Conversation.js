@@ -1,0 +1,1 @@
+import mongoose from 'mongoose'; export default mongoose.model('Conversation',new mongoose.Schema({participants:[{type:mongoose.Schema.Types.ObjectId,ref:'User',required:true}],order:{type:mongoose.Schema.Types.ObjectId,ref:'Order'},lastMessage:{text:String,sender:{type:mongoose.Schema.Types.ObjectId,ref:'User'},createdAt:Date}},{timestamps:true}));

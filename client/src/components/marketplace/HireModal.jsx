@@ -4,6 +4,7 @@ import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import Avatar from '../ui/Avatar';
 import { useToast } from '../../context/ToastContext';
+import { api } from '../../lib/api';
 import { ShieldCheck, CheckCircle2, Clock, Sparkles } from 'lucide-react';
 
 export const HireModal = ({ isOpen, onClose, service, tierKey, packageData }) => {
@@ -14,14 +15,18 @@ export const HireModal = ({ isOpen, onClose, service, tierKey, packageData }) =>
 
   if (!service || !packageData) return null;
 
-  const handleConfirmHire = () => {
+  const handleConfirmHire = async () => {
     setIsProcessing(true);
-    setTimeout(() => {
+    try {
+      await api.post('/orders', { serviceId: service.id, tier: tierKey, requirements: notes });
       setIsProcessing(false);
       onClose();
-      addToast(`Order placed for ${service.title}! Escrow funded with $${packageData.price}.`, 'success');
+      addToast(`Order placed for ${service.title}. Awaiting freelancer acceptance.`, 'success');
       navigate('/dashboard/projects');
-    }, 1200);
+    } catch (error) {
+      setIsProcessing(false);
+      addToast(error.message, 'error');
+    }
   };
 
   return (

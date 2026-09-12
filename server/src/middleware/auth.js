@@ -1,0 +1,3 @@
+import User from '../models/User.js'; import { ApiError,asyncHandler } from '../utils/api.js'; import { verifyAccess } from '../utils/tokens.js';
+export const protect=asyncHandler(async(req,res,next)=>{const h=req.headers.authorization; if(!h?.startsWith('Bearer '))throw new ApiError(401,'Authentication required'); const p=verifyAccess(h.slice(7)); const u=await User.findById(p.sub).select('+password'); if(!u||u.accountStatus==='suspended')throw new ApiError(401,'Account is unavailable'); req.user=u; next();});
+export const allow=(...roles)=>(req,res,next)=>roles.includes(req.user.role)?next():next(new ApiError(403,'Insufficient permissions'));

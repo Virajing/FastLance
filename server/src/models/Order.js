@@ -1,3 +1,25 @@
 import mongoose from 'mongoose';
-const pkg=new mongoose.Schema({tier:String,name:String,price:Number,deliveryDays:Number,revisions:mongoose.Schema.Types.Mixed,features:[String]},{_id:false});
-export default mongoose.model('Order',new mongoose.Schema({title:String,service:{type:mongoose.Schema.Types.ObjectId,ref:'Service',required:true},client:{type:mongoose.Schema.Types.ObjectId,ref:'User',required:true},freelancer:{type:mongoose.Schema.Types.ObjectId,ref:'User',required:true},packageSnapshot:pkg,requirements:String,status:{type:String,enum:['pending','accepted','rejected','awaiting_payment','active','delivered','revision_requested','completed','cancelled','disputed'],default:'pending'},totalAmount:{type:Number,required:true},platformFee:{type:Number,required:true},freelancerAmount:{type:Number,required:true},paymentStatus:{type:String,enum:['unpaid','paid','refunded'],default:'unpaid'},deliveryNote:String,deliveredAt:Date,completedAt:Date},{timestamps:true}));
+import { ref, minor, options } from './shared.js';
+import { packageSchema } from './Service.js';
+const milestone = new mongoose.Schema({
+  title: { type: String, required: true }, amountMinor: { ...minor, required: true }, deadline: Date,
+  status: { type: String, enum: ['pending', 'submitted', 'revision_requested', 'approved'], default: 'pending' },
+  latestDelivery: ref('Delivery'), approvedAt: Date,
+}, { timestamps: true });
+const schema = new mongoose.Schema({
+  title: { type: String, required: true }, service: ref('Service'), job: ref('Job'), proposal: ref('Proposal'),
+  client: { ...ref('User'), required: true }, freelancer: { ...ref('User'), required: true },
+  packageSnapshot: packageSchema, requirements: String, attachments: [ref('Attachment')],
+  milestones: [milestone], deadline: Date,
+  status: { type: String, enum: ['pending', 'rejected', 'awaiting_payment', 'active', 'milestone_submitted',
+    'delivered', 'revision_requested', 'completed', 'cancelled', 'disputed', 'resolved', 'refunded'], default: 'pending' },
+  totalAmountMinor: { ...minor, required: true }, platformFeeMinor: { ...minor, required: true },
+  freelancerAmountMinor: { ...minor, required: true }, currency: { type: String, enum: ['INR'], default: 'INR' },
+  paymentStatus: { type: String, enum: ['unpaid', 'paid', 'refund_pending', 'refunded', 'partially_refunded', 'failed'], default: 'unpaid' },
+  paidAt: Date, deliveredAt: Date, completedAt: Date,
+  creationKey: String,
+}, options);
+schema.index({ client: 1, createdAt: -1 });
+schema.index({ freelancer: 1, status: 1, createdAt: -1 });
+schema.index({ client: 1, creationKey: 1 }, { unique: true, partialFilterExpression: { creationKey: { $type: 'string' } } });
+export default mongoose.model('Order', schema);

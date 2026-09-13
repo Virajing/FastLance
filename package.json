@@ -1,6 +1,16 @@
 {
-  "name":"fastlance",
-  "private":true,
-  "scripts":{"dev":"concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"","start":"npm run start --prefix server","test":"npm run test --prefix server","seed":"npm run seed --prefix server","build":"npm run build --prefix client"},
-  "devDependencies":{"concurrently":"^9.1.2"}
+  "name": "fastlance",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "start": "npm run start --prefix server",
+    "test": "npm run test --prefix server",
+    "seed": "npm run seed --prefix server",
+    "build": "npm run build --prefix client"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "concurrently": "^9.1.2",
+    "prettier": "^3.9.6"
+  }
 }

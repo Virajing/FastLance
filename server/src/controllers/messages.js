@@ -1,6 +1,34 @@
-import Conversation from '../models/Conversation.js';import Message from '../models/Message.js';import User from '../models/User.js';import {ApiError,asyncHandler,ok,page} from '../utils/api.js';import {notify} from '../services/notifications.js';
-const can=(c,id)=>c.participants.some(p=>String(p._id||p)===String(id));const convView=(c,me)=>{const x=c.toObject();const p=x.participants.find(p=>String(p._id)!==String(me));return {...x,id:x._id.toString(),participant:{id:p?._id,name:p?.name,avatar:p?.avatar,title:p?.professionalTitle||p?.headline,online:false},lastMessage:x.lastMessage&&{text:x.lastMessage.text,timestamp:x.lastMessage.createdAt,senderId:String(x.lastMessage.sender)},unreadCount:0};};
-export const list=asyncHandler(async(req,res)=>{const cs=await Conversation.find({participants:req.user._id}).populate('participants','name avatar professionalTitle headline').sort('-updatedAt');ok(res,{conversations:cs.map(c=>convView(c,req.user.id))});});
-export const create=asyncHandler(async(req,res)=>{const other=await User.findById(req.body.participantId);if(!other)throw new ApiError(404,'User not found');if(other.role===req.user.role)throw new ApiError(400,'Conversations require a client and freelancer');let c=await Conversation.findOne({participants:{$all:[req.user._id,other._id],$size:2},order:req.body.orderId||null});if(!c)c=await Conversation.create({participants:[req.user._id,other._id],order:req.body.orderId});await c.populate('participants','name avatar professionalTitle headline');ok(res,{conversation:convView(c,req.user.id)},'Conversation ready',201);});
-export const history=asyncHandler(async(req,res)=>{const c=await Conversation.findById(req.params.id);if(!c||!can(c,req.user.id))throw new ApiError(403,'Conversation access denied');const pg=Math.max(+req.query.page||1,1),limit=Math.min(+req.query.limit||50,100);const [rows,total]=await Promise.all([Message.find({conversation:c._id}).sort('-createdAt').skip((pg-1)*limit).limit(limit),Message.countDocuments({conversation:c._id})]);await Message.updateMany({conversation:c._id,sender:{$ne:req.user._id}},{ $addToSet:{readBy:req.user._id}});page(res,rows.reverse().map(m=>({...m.toObject(),id:m._id.toString(),senderId:String(m.sender),isOwn:String(m.sender)===req.user.id,timestamp:m.createdAt})),{page:pg,limit,total,pages:Math.ceil(total/limit)});});
-export const send=asyncHandler(async(req,res)=>{const c=await Conversation.findById(req.params.id);if(!c||!can(c,req.user.id))throw new ApiError(403,'Conversation access denied');const m=await Message.create({conversation:c._id,sender:req.user._id,text:req.body.text,attachmentUrl:req.body.attachmentUrl,readBy:[req.user._id]});c.lastMessage={text:m.text,sender:req.user._id,createdAt:m.createdAt};await c.save();const recipient=c.participants.find(x=>String(x)!==req.user.id);await notify(recipient,'message','New message',m.text,'/dashboard/messages');req.io?.to(`user:${recipient}`).emit('message:new',{conversationId:c.id,message:m});ok(res,{message:m},'Message sent',201);});
+import Conversation from '../models/Conversation.js';
+import Message from '../models/Message.js';
+import { asyncHandler, ok, page, pagination, pageMeta, ApiError } from '../utils/api.js';
+import { authorizeConversation, conversationView, createConversation, messageView, sendMessage, receipt } from '../services/messaging.js';
+export const list = asyncHandler(async (req, res) => {
+  const paging = pagination(req.validated.query);
+  const [conversations, total] = await Promise.all([
+    Conversation.find({ participants: req.user._id }).sort({ updatedAt: -1, _id: -1 }).skip(paging.skip).limit(paging.limit),
+    Conversation.countDocuments({ participants: req.user._id }),
+  ]);
+  page(res, await Promise.all(conversations.map(row => conversationView(row, req.user.id, req.io))), pageMeta(paging, total));
+});
+export const create = asyncHandler(async (req, res) => ok(res, { conversation: await createConversation(req.user, req.validated.body.participantId, req.io) }, 'Conversation ready', 201));
+export const detail = asyncHandler(async (req, res) => {
+  const conversation = await authorizeConversation(req.params.id, req.user._id);
+  ok(res, { conversation: await conversationView(conversation, req.user.id, req.io) });
+});
+export const history = asyncHandler(async (req, res) => {
+  const conversation = await authorizeConversation(req.params.id, req.user._id);
+  const paging = pagination(req.validated.query), filter = { conversation: conversation._id };
+  if (req.validated.query.before) {
+    const cursor = await Message.findOne({ _id: req.validated.query.before, conversation: conversation._id });
+    if (!cursor) throw new ApiError(400, 'Message cursor is not in this conversation');
+    filter.sequence = { $lt: cursor.sequence };
+  }
+  const [rows, total] = await Promise.all([
+    Message.find(filter).sort({ sequence: -1, _id: -1 }).skip(paging.skip).limit(paging.limit),
+    Message.countDocuments(filter),
+  ]);
+  page(res, rows.reverse().map(messageView), { ...pageMeta(paging, total), hasMore: total > paging.skip + rows.length, nextCursor: rows[0]?.id ?? null });
+});
+export const send = asyncHandler(async (req, res) => ok(res, await sendMessage(req.user, req.params.id, req.validated.body, req.io), 'Message saved', 201));
+export const read = asyncHandler(async (req, res) => ok(res, await receipt(req.user, req.params.id, req.validated.body.sequence, true, req.io)));
+export const delivered = asyncHandler(async (req, res) => ok(res, await receipt(req.user, req.params.id, req.validated.body.sequence, false, req.io)));

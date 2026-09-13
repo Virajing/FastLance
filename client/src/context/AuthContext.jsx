@@ -1,64 +1,64 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { api, setAccessToken } from '../lib/api';
-
-const AuthContext = createContext(null);
-
-export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    api.post('/auth/refresh').then((r) => { setAccessToken(r.data.accessToken); return api.get('/auth/me'); }).then((r) => setUser(r.data.user)).catch(() => setUser(null)).finally(() => setLoading(false));
+import { useEffect, useState, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { api, acceptSession, subscribeSession, refreshSession } from '../lib/api';
+import { AuthContext } from './auth';
+let restorePromise;
+export function AuthProvider({ children }) {
+  const [state, setState] = useState({ user: null, token: null, loading: true, error: null });
+  const queryClient = useQueryClient();
+  const restore = useCallback(() => {
+    if (!restorePromise) restorePromise = refreshSession().finally(() => { restorePromise = undefined; });
+    return restorePromise;
   }, []);
-
-  const login = async (email, password) => {
-    const result = await api.post('/auth/login', { email, password });
-    setAccessToken(result.data.accessToken);
-    setUser(result.data.user);
+  useEffect(() => {
+    let mounted = true;
+    const unsubscribe = subscribeSession(session => {
+      if (mounted) setState({ user: session?.user ?? null, token: session?.accessToken ?? null, loading: false, error: null });
+    });
+    restore().catch(error => {
+      if (mounted) setState({ user: null, token: null, loading: false, error: [401, 403].includes(error.status) ? null : error });
+    });
+    return () => { mounted = false; unsubscribe(); };
+  }, [restore]);
+  const authenticate = async (path, data) => {
+    const result = await api.post(path, data);
+    await queryClient.cancelQueries();
+    queryClient.clear(); acceptSession(result.data);
     return result.data.user;
   };
-
-  const register = async (data) => {
-    const result = await api.post('/auth/register', data);
-    setAccessToken(result.data.accessToken);
-    setUser(result.data.user);
+  const updateProfile = async data => {
+    const result = await api.patch('/auth/me', data);
+    setState(previous => ({ ...previous, user: result.data.user }));
+    await queryClient.invalidateQueries();
     return result.data.user;
   };
-
+  const switchRole = async activeRole => {
+    const result = await api.patch('/auth/role', { activeRole });
+    await queryClient.cancelQueries(); queryClient.clear();
+    setState(previous => ({ ...previous, user: result.data.user }));
+    return result.data.user;
+  };
+  const onboard = async data => {
+    const result = await api.post('/auth/onboard', data);
+    await queryClient.cancelQueries(); queryClient.clear();
+    setState(previous => ({ ...previous, user: result.data.user }));
+    return result.data.user;
+  };
   const logout = async () => {
-    await api.post('/auth/logout').catch(() => {});
-    setAccessToken(null);
-    setUser(null);
+    await api.post('/auth/logout');
+    await queryClient.cancelQueries(); queryClient.clear(); acceptSession(null);
   };
-
-  const switchRole = () => {};
-  const updateProfile = async (updates) => {
-    const result = await api.patch('/auth/me', updates);
-    setUser(result.data.user);
-    return result.data.user;
+  const changePassword = async data => {
+    await api.patch('/auth/password', data);
+    await queryClient.cancelQueries(); queryClient.clear(); acceptSession(null);
   };
-
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        loading,
-        isAuthenticated: !!user,
-        login,
-        register,
-        logout,
-        switchRole,
-        updateProfile
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
-};
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-};
+  const retry = () => {
+    setState(previous => ({ ...previous, loading: true, error: null }));
+    restore().catch(error => setState({ user: null, token: null, loading: false, error: [401, 403].includes(error.status) ? null : error }));
+  };
+  return <AuthContext.Provider value={{ ...state, isAuthenticated: Boolean(state.user),
+    login: (email, password) => authenticate('/auth/login', { email, password }),
+    register: data => authenticate('/auth/register', data), logout, switchRole, updateProfile, onboard, changePassword, retry }}>
+    {children}
+  </AuthContext.Provider>;
+}

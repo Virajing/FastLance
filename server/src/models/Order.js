@@ -18,6 +18,7 @@ const schema = new mongoose.Schema({
   paymentStatus: { type: String, enum: ['unpaid', 'paid', 'refund_pending', 'refunded', 'partially_refunded', 'failed'], default: 'unpaid' },
   paidAt: Date, deliveredAt: Date, completedAt: Date,
   creationKey: String,
+  creationFingerprint: String,
 }, options);
 schema.index({ client: 1, createdAt: -1 });
 schema.index({ freelancer: 1, status: 1, createdAt: -1 });

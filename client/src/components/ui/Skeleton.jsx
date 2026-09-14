@@ -1,4 +1,3 @@
-import React from 'react';
 
 export const Skeleton = ({
   variant = 'text', // 'text' | 'circle' | 'rect' | 'card'

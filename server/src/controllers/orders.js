@@ -34,12 +34,23 @@ export const detail = asyncHandler(async (req, res) => {
 });
 export const createOrder = asyncHandler(async (req, res) => {
   const data = req.validated.body;
-  const existing = await Order.findOne({ client: req.user._id, creationKey: data.clientId });
-  if (existing) return ok(res, { order: existing });
+  const creationFingerprint = crypto.createHash('sha256').update(JSON.stringify({
+    serviceId: data.serviceId, tier: data.serviceId ? data.tier || 'basic' : undefined,
+    freelancerId: data.freelancerId, title: data.title, amountMinor: data.amountMinor,
+    deliveryDays: data.deliveryDays, requirements: data.requirements, milestones: data.milestones,
+  })).digest('hex');
+  const replay = existing => {
+    if (existing.creationFingerprint && existing.creationFingerprint !== creationFingerprint)
+      throw new ApiError(409, 'This creation key already belongs to a different contract submission.');
+    return ok(res, { order: existing });
+  };
+  const existing = await Order.findOne({ client: req.user._id, creationKey: data.creationKey });
+  if (existing) return replay(existing);
+  try {
   const order = await transaction(async context => {
     let freelancer, packageSnapshot, title, service, totalAmountMinor;
     if (data.serviceId) {
-      service = await Service.findOne({ _id: data.serviceId, status: 'published' }).session(context.session);
+      service = await Service.findOneAndUpdate({ _id: data.serviceId, status: 'published' }, { $inc: { __v: 1 } }, { new: true, session: context.session });
       if (!service) throw new ApiError(404, 'Service not found');
       packageSnapshot = service.packages?.[data.tier || 'basic']?.toObject();
       if (!Number.isSafeInteger(packageSnapshot?.priceMinor)) throw new ApiError(409, 'Package is unavailable or requires price migration');
@@ -56,7 +67,7 @@ export const createOrder = asyncHandler(async (req, res) => {
     if (milestones.reduce((sum, row) => sum + row.amountMinor, 0) !== totalAmountMinor) throw new ApiError(400, 'Milestone amounts must equal the contract total');
     const [created] = await Order.create([{
       title, client: req.user._id, freelancer: freelancer._id, service: service?._id, packageSnapshot,
-      requirements: data.requirements, creationKey: data.clientId || crypto.randomUUID(),
+      requirements: data.requirements, creationKey: data.creationKey, creationFingerprint,
       totalAmountMinor, ...calculateSplit(totalAmountMinor), milestones,
     }], { session: context.session });
     await notify(freelancer._id, 'order', 'New contract offer', req.user.name + ' sent a contract offer.',
@@ -65,6 +76,12 @@ export const createOrder = asyncHandler(async (req, res) => {
     return created;
   }, req.io);
   ok(res, { order }, 'Contract created', 201);
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    const existing = await Order.findOne({ client: req.user._id, creationKey: data.creationKey });
+    if (!existing) throw error;
+    return replay(existing);
+  }
 });
 export const transition = asyncHandler(async (req, res) => {
   const data = req.validated.body;
@@ -140,9 +157,11 @@ export const review = asyncHandler(async (req, res) => {
     if (!order) throw new ApiError(403, 'Only the client of a paid completed contract may review');
     const [review] = await Review.create([{ ...req.validated.body, order: order._id, client: req.user._id, freelancer: order.freelancer, service: order.service, verified: true }], { session: context.session });
     const [summary] = await Review.aggregate([{ $match: { freelancer: order.freelancer, verified: true } }, { $group: { _id: null, average: { $avg: '$rating' }, count: { $sum: 1 } } }]).session(context.session);
+    if (!summary) throw new ApiError(409, 'Review aggregation failed. Retry the submission.');
     await User.updateOne({ _id: order.freelancer }, { averageRating: summary.average, reviewCount: summary.count }, { session: context.session });
     if (order.service) {
       const [serviceSummary] = await Review.aggregate([{ $match: { service: order.service, verified: true } }, { $group: { _id: null, average: { $avg: '$rating' }, count: { $sum: 1 } } }]).session(context.session);
+      if (!serviceSummary) throw new ApiError(409, 'Service review aggregation failed. Retry the submission.');
       await Service.updateOne({ _id: order.service }, { rating: serviceSummary.average, reviewsCount: serviceSummary.count }, { session: context.session });
     }
     await notify(order.freelancer, 'review', 'New verified review', req.user.name + ' reviewed your work.', '/dashboard/reviews', context);

@@ -33,7 +33,7 @@ userSchema.methods.currentRole = function () {
 userSchema.methods.publicData = function () {
   const fields = ['name', 'email', 'avatar', 'bio', 'headline', 'company', 'website', 'location',
     'professionalTitle', 'skills', 'serviceCategories', 'portfolio', 'experience', 'availability',
-    'hourlyRateMinor', 'accountStatus', 'verificationStatus', 'averageRating', 'reviewCount', 'completedProjects', 'createdAt'];
+    'hourlyRateMinor', 'accountStatus', 'verificationStatus', 'averageRating', 'reviewCount', 'completedProjects', 'createdAt', 'updatedAt'];
   return { ...Object.fromEntries(fields.map(key => [key, this[key]])),
     id: this.id, roles: this.ownedRoles(), activeRole: this.currentRole(), isAdmin: this.role === 'admin' };
 };

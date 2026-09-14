@@ -20,7 +20,7 @@ export const overview = asyncHandler(async (req, res) => {
     freelancer
       ? Ledger.aggregate([{ $match: { freelancer: userId } }, { $group: { _id: '$status', amountMinor: { $sum: '$payableMinor' } } }])
       : Order.aggregate([{ $match: { client: userId, totalAmountMinor: { $exists: true }, paymentStatus: { $in: ['paid', 'refund_pending'] } } }, { $group: { _id: null, amountMinor: { $sum: '$totalAmountMinor' } } }]),
-    Job.countDocuments({ client: userId }), Proposal.countDocuments({ ...filter, status: 'pending' }),
+    Job.countDocuments({ client: userId, status: 'open' }), Proposal.countDocuments({ ...filter, status: 'pending' }),
     freelancer ? Service.countDocuments({ freelancer: userId }) : 0,
     freelancer ? Review.aggregate([{ $match: { freelancer: userId, verified: true } }, { $group: { _id: null, average: { $avg: '$rating' }, count: { $sum: 1 } } }]) : [],
     Conversation.find({ participants: userId }).distinct('_id'),

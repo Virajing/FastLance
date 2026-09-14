@@ -1,400 +1,117 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
-import { CONVERSATIONS } from '../../data/mockData';
-import { useToast } from '../../context/ToastContext';
-import Card from '../../components/ui/Card';
-import Avatar from '../../components/ui/Avatar';
-import Badge from '../../components/ui/Badge';
+import { useEffect, useRef, useState } from 'react';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
+import { useAuth } from '../../context/auth';
+import { useSocket } from '../../context/socket';
+import { useData, useAction } from '../../hooks/useData';
+import { api } from '../../lib/api';
+import { messaging } from '../../services';
+import DataState, { ErrorNotice } from '../../components/ui/DataState';
+import Records from '../../components/ui/Records';
 import Button from '../../components/ui/Button';
-import Input from '../../components/ui/Input';
-import {
-  Send,
-  Paperclip,
-  Search,
-  CheckCheck,
-  ArrowLeft,
-  ExternalLink,
-  ShieldCheck,
-  FileText,
-  Sparkles,
-  Phone,
-  Video,
-  MoreVertical
-} from 'lucide-react';
-
-export const Messages = () => {
-  const [searchParams] = useSearchParams();
-  const toParam = searchParams.get('to');
-  const { addToast } = useToast();
-
-  const [conversations, setConversations] = useState(CONVERSATIONS);
-  const [selectedConvId, setSelectedConvId] = useState(() => {
-    if (toParam) {
-      const match = CONVERSATIONS.find(
-        (c) =>
-          c.participant.name.toLowerCase().includes(toParam.toLowerCase()) ||
-          c.participant.id === toParam
-      );
-      if (match) return match.id;
-    }
-    return CONVERSATIONS[0]?.id || 'conv-1';
-  });
-
-  const [messageText, setMessageText] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showMobileChat, setShowMobileChat] = useState(!!toParam);
-
-  const messagesEndRef = useRef(null);
-
-  const activeConv = conversations.find((c) => c.id === selectedConvId) || conversations[0];
-
-  // Auto scroll to bottom of messages
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [activeConv?.messages, isTyping]);
-
-  // Handle URL change
-  useEffect(() => {
-    if (toParam) {
-      const match = conversations.find(
-        (c) =>
-          c.participant.name.toLowerCase().includes(toParam.toLowerCase()) ||
-          c.participant.id === toParam
-      );
-      if (match) {
-        setSelectedConvId(match.id);
-        setShowMobileChat(true);
-      }
-    }
-  }, [toParam, conversations]);
-
-  const handleSendMessage = (e) => {
-    e?.preventDefault();
-    if (!messageText.trim()) return;
-
-    const userMessage = {
-      id: 'm-' + Date.now(),
-      senderId: 'me',
-      text: messageText.trim(),
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      isOwn: true
-    };
-
-    // Update conversation
-    setConversations((prev) =>
-      prev.map((c) => {
-        if (c.id === activeConv.id) {
-          return {
-            ...c,
-            lastMessage: {
-              text: userMessage.text,
-              timestamp: userMessage.timestamp,
-              senderId: 'me'
-            },
-            messages: [...c.messages, userMessage]
-          };
-        }
-        return c;
-      })
-    );
-
-    setMessageText('');
-
-    // Simulate freelancer reply
-    setIsTyping(true);
-    setTimeout(() => {
-      setIsTyping(false);
-      const replies = [
-        "Thanks for the message! I'm inspecting the latest code build right now.",
-        'Got it! That aligns perfectly with our milestone timeline.',
-        'Working on this update today. Will send over the commit hash soon!',
-        'Understood. I will push the requested revision to GitHub shortly.'
-      ];
-      const randomReply = replies[Math.floor(Math.random() * replies.length)];
-
-      const replyMsg = {
-        id: 'm-reply-' + Date.now(),
-        senderId: activeConv.participant.id,
-        text: randomReply,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isOwn: false
-      };
-
-      setConversations((prev) =>
-        prev.map((c) => {
-          if (c.id === activeConv.id) {
-            return {
-              ...c,
-              lastMessage: {
-                text: replyMsg.text,
-                timestamp: replyMsg.timestamp,
-                senderId: activeConv.participant.id
-              },
-              messages: [...c.messages, replyMsg]
-            };
-          }
-          return c;
-        })
-      );
-    }, 1500);
+import Field from '../../components/ui/Field';
+import FileUpload from '../../components/ui/FileUpload';
+import AttachmentLinks from '../../components/ui/AttachmentLinks';
+import { dateTime } from '../../lib/format';
+import { mergeMessages } from '../../lib/messages';
+function Thread({ id, back }) {
+ const { user } = useAuth(), { socket, status } = useSocket(), queryClient = useQueryClient();
+ const detail = useData(messaging.conversation(id));
+ const key = ['messages', user.id, id];
+ const history = useInfiniteQuery({ queryKey: key, initialPageParam: undefined,
+  queryFn: ({ pageParam, signal }) => api.get(messaging.history(id, { before: pageParam, limit: 30 }), signal),
+  getNextPageParam: last => last.pagination.hasMore ? last.pagination.nextCursor : undefined, retry: false });
+ const [pending, setPending] = useState([]), [draft, setDraft] = useState(''), [attachments, setAttachments] = useState([]), [typing, setTyping] = useState(false), [receiptError, setReceiptError] = useState(null);
+ const typingAt = useRef(0), typingTimer = useRef(), remoteTimer = useRef(), readThrough = useRef(0), deliveredThrough = useRef(0);
+ const rows = mergeMessages(history.data?.pages.flatMap(page => page.data) || [], pending);
+ const latest = history.data?.pages[0]?.data.at(-1)?.sequence || 0;
+ const send = useAction(async message => {
+  let result;
+  if (socket?.connected) {
+   try { const ack = await socket.timeout(7000).emitWithAck('message:send', { ...message, conversationId: id });
+    if (!ack.success) throw Object.assign(new Error(ack.error.message), { status: ack.error.status });
+    result = { data: ack.data };
+   } catch (error) { if (error.status) throw error; result = await messaging.send(id, message); }
+  } else result = await messaging.send(id, message);
+  setPending(previous => previous.filter(row => row.clientId !== message.clientId));
+  queryClient.setQueryData(['messages', user.id, id], previous => previous ? { ...previous, pages: previous.pages.map((page, index) => index ? page : { ...page, data: mergeMessages(page.data, [result.data.message]) }) } : previous);
+  await queryClient.invalidateQueries({ queryKey: ['messages', user.id, id] });
+ });
+ function transmit(message) {
+  setPending(previous => mergeMessages(previous.filter(row => row.clientId !== message.clientId), [{ ...message, senderId: user.id, pending: true }]));
+  send.mutate(message, { onError: error => setPending(previous => previous.map(row => row.clientId === message.clientId ? { ...row, pending: false, error: error.message } : row)) });
+ }
+ useEffect(() => {
+  if (!socket) return;
+  socket.emit('conversation:join', { conversationId: id }, ack => { if (!ack.success) setReceiptError(new Error(ack.error.message)); });
+  const invalidate = payload => { if (payload.conversationId === id) queryClient.invalidateQueries({ queryKey: ['messages', user.id, id] }); };
+  const incoming = payload => { if (payload.conversationId !== id) return; invalidate(payload); };
+  const typingUpdate = payload => { if (payload.conversationId !== id || payload.userId === user.id) return;
+   setTyping(payload.typing); clearTimeout(remoteTimer.current);
+   if (payload.typing) remoteTimer.current = setTimeout(() => setTyping(false), 5000);
   };
-
-  const handleAttachFile = () => {
-    addToast('Attached mockup file: "dashboard-revision-v2.fig"', 'info');
+  socket.on('message:new', incoming); socket.on('message:read', invalidate); socket.on('message:delivered', invalidate); socket.on('typing:updated', typingUpdate);
+  queryClient.invalidateQueries({ queryKey: ['messages', user.id, id] });
+  return () => { socket.emit('typing:stop', { conversationId: id }); socket.emit('conversation:leave', { conversationId: id });
+   socket.off('message:new', incoming); socket.off('message:read', invalidate); socket.off('message:delivered', invalidate); socket.off('typing:updated', typingUpdate);
+   clearTimeout(typingTimer.current); clearTimeout(remoteTimer.current);
   };
-
-  const filteredConversations = conversations.filter((c) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      c.participant.name.toLowerCase().includes(q) ||
-      c.participant.title.toLowerCase().includes(q) ||
-      c.lastMessage.text.toLowerCase().includes(q)
-    );
-  });
-
-  return (
-    <div className="h-[calc(100vh-10rem)] min-h-[550px] neu-flat rounded-3xl border border-white/80 overflow-hidden flex flex-col md:flex-row">
-      {/* Left Conversations Sidebar */}
-      <div
-        className={`w-full md:w-80 lg:w-96 border-r border-slate-200/70 flex flex-col bg-[#f0f3f8] shrink-0 ${
-          showMobileChat ? 'hidden md:flex' : 'flex'
-        }`}
-      >
-        {/* Search header */}
-        <div className="p-4 border-b border-slate-200/70 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-bold text-slate-900">Direct Messages</h2>
-            <Badge variant="primary" size="sm">
-              {conversations.length} Active
-            </Badge>
-          </div>
-          <Input
-            placeholder="Search messages or talent..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            leftIcon={<Search className="w-4 h-4 text-slate-400" />}
-            clearable={true}
-            onClear={() => setSearchQuery('')}
-          />
-        </div>
-
-        {/* Conversation items */}
-        <div className="flex-1 overflow-y-auto divide-y divide-slate-200/40 p-2 space-y-1">
-          {filteredConversations.map((conv) => {
-            const isSelected = conv.id === activeConv?.id;
-            return (
-              <div
-                key={conv.id}
-                onClick={() => {
-                  setSelectedConvId(conv.id);
-                  setShowMobileChat(true);
-                }}
-                className={`p-3 rounded-2xl cursor-pointer transition-all flex items-start gap-3 ${
-                  isSelected
-                    ? 'neu-pressed bg-[#e4e9f2] border border-indigo-200/50'
-                    : 'hover:bg-slate-100/80'
-                }`}
-              >
-                <Avatar
-                  src={conv.participant.avatar}
-                  name={conv.participant.name}
-                  size="md"
-                  status={conv.participant.online ? 'online' : 'offline'}
-                  className="shrink-0 mt-0.5"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-1 mb-0.5">
-                    <h4 className="text-xs font-bold text-slate-900 truncate">
-                      {conv.participant.name}
-                    </h4>
-                    <span className="text-[10px] text-slate-400 shrink-0">
-                      {conv.lastMessage.timestamp}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 line-clamp-1 mb-1">
-                    {conv.participant.title}
-                  </p>
-                  <p className="text-xs text-slate-600 truncate font-medium">
-                    {conv.lastMessage.senderId === 'me' ? 'You: ' : ''}
-                    {conv.lastMessage.text}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Right Chat Panel */}
-      <div
-        className={`flex-1 flex flex-col bg-[#eef2f7] ${
-          showMobileChat ? 'flex' : 'hidden md:flex'
-        }`}
-      >
-        {activeConv ? (
-          <>
-            {/* Chat Header */}
-            <div className="px-6 py-4 border-b border-slate-200/80 bg-[#f0f3f8] flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setShowMobileChat(false)}
-                  className="md:hidden p-1.5 rounded-xl neu-sm text-slate-600"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                </button>
-                <Avatar
-                  src={activeConv.participant.avatar}
-                  name={activeConv.participant.name}
-                  size="md"
-                  status={activeConv.participant.online ? 'online' : 'offline'}
-                />
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold text-slate-900">
-                      {activeConv.participant.name}
-                    </h3>
-                    <Badge variant="primary" size="sm" className="hidden sm:inline-flex">
-                      Escrow Active
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-slate-500">
-                    {activeConv.participant.online ? (
-                      <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                        Active now
-                      </span>
-                    ) : (
-                      activeConv.participant.lastSeen
-                    )}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Link
-                  to={`/freelancers/${activeConv.participant.id}`}
-                  className="neu-sm hover:neu-flat-hover px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 flex items-center gap-1.5 transition-all border border-white/60"
-                >
-                  <ExternalLink className="w-3.5 h-3.5 text-indigo-600" />
-                  <span className="hidden sm:inline">Profile</span>
-                </Link>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => addToast('Escrow milestones: 2 completed, 1 active.', 'info')}
-                  className="text-xs hidden sm:flex"
-                >
-                  Contracts
-                </Button>
-              </div>
-            </div>
-
-            {/* Messages Thread */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {/* Escrow safety alert pill */}
-              <div className="flex justify-center">
-                <div className="neu-inset rounded-full px-4 py-1.5 text-[11px] font-medium text-slate-500 flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>Always keep communication and payments inside FastLance Escrow</span>
-                </div>
-              </div>
-
-              {activeConv.messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex flex-col ${msg.isOwn ? 'items-end' : 'items-start'}`}
-                >
-                  <div
-                    className={`max-w-md sm:max-w-lg rounded-2xl p-4 text-xs sm:text-sm leading-relaxed transition-all ${
-                      msg.isOwn
-                        ? 'bg-linear-to-r from-indigo-600 to-indigo-700 text-white shadow-md shadow-indigo-500/20 rounded-br-none'
-                        : 'neu-raised bg-white/90 text-slate-800 border border-white rounded-bl-none'
-                    }`}
-                  >
-                    <p>{msg.text}</p>
-
-                    {/* Optional attachment */}
-                    {msg.attachments && msg.attachments.length > 0 && (
-                      <div className="mt-2.5 pt-2 border-t border-white/20 space-y-1.5">
-                        {msg.attachments.map((att, i) => (
-                          <div
-                            key={i}
-                            className="neu-inset rounded-xl p-2 flex items-center gap-2 text-xs text-slate-800 bg-white/70"
-                          >
-                            <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
-                            <span className="font-semibold truncate flex-1">{att.name}</span>
-                            <span className="text-[10px] text-slate-500 shrink-0">{att.size}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <span className="text-[10px] text-slate-400 mt-1 px-1">
-                    {msg.timestamp} {msg.isOwn && '• Sent'}
-                  </span>
-                </div>
-              ))}
-
-              {/* Typing indicator */}
-              {isTyping && (
-                <div className="flex items-center gap-2 text-xs text-slate-500 italic py-1">
-                  <div className="w-2 h-2 rounded-full bg-indigo-500 animate-bounce" />
-                  <div className="w-2 h-2 rounded-full bg-indigo-500 animate-bounce [animation-delay:0.2s]" />
-                  <div className="w-2 h-2 rounded-full bg-indigo-500 animate-bounce [animation-delay:0.4s]" />
-                  <span>{activeConv.participant.name} is typing...</span>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* Input Bar */}
-            <div className="p-4 bg-[#f0f3f8] border-t border-slate-200/80">
-              <form onSubmit={handleSendMessage} className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleAttachFile}
-                  title="Attach file"
-                  className="p-2.5 rounded-xl neu-sm hover:neu-flat-hover text-slate-500 hover:text-indigo-600 transition-all cursor-pointer border border-white/60 shrink-0"
-                >
-                  <Paperclip className="w-4 h-4" />
-                </button>
-
-                <div className="flex-1">
-                  <input
-                    type="text"
-                    placeholder={`Message ${activeConv.participant.name}...`}
-                    value={messageText}
-                    onChange={(e) => setMessageText(e.target.value)}
-                    className="w-full neu-inset rounded-xl px-4 py-2.5 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
-                  />
-                </div>
-
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="sm"
-                  disabled={!messageText.trim()}
-                  className="gap-1.5 shrink-0 px-4"
-                >
-                  <Send className="w-4 h-4" />
-                  <span className="hidden sm:inline">Send</span>
-                </Button>
-              </form>
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">
-            Select a conversation to start chatting
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
-export default Messages;
+ }, [socket, id, queryClient, user.id]);
+ useEffect(() => {
+  let active = true;
+  async function receipts() {
+   try {
+    if (latest > deliveredThrough.current) { await messaging.delivered(id, latest); if (active) deliveredThrough.current = latest; }
+    if (document.visibilityState === 'visible' && latest > readThrough.current) {
+     await messaging.read(id, latest); if (active) readThrough.current = latest;
+     queryClient.invalidateQueries({ queryKey: ['api'] });
+    }
+   } catch (error) { if (active) setReceiptError(error); }
+  }
+  receipts(); document.addEventListener('visibilitychange', receipts);
+  return () => { active = false; document.removeEventListener('visibilitychange', receipts); };
+ }, [latest, id, queryClient, status]);
+ useEffect(() => {
+  if (status === 'online') return;
+  const timer = setInterval(() => queryClient.invalidateQueries({ queryKey: ['messages', user.id, id] }), 10000);
+  return () => clearInterval(timer);
+ }, [status, queryClient, id, user.id]);
+ function draftChanged(value) {
+  setDraft(value);
+  if (!socket) return;
+  if (value && Date.now() - typingAt.current > 1000) { socket.emit('typing:start', { conversationId: id }); typingAt.current = Date.now(); }
+  clearTimeout(typingTimer.current);
+  typingTimer.current = setTimeout(() => socket.emit('typing:stop', { conversationId: id }), 1800);
+ }
+ return <section className="space-y-4 min-w-0">
+  <Button className="md:hidden" onClick={back}>Back to conversations</Button>
+  <DataState query={detail}>{({ conversation }) => <header><h2 className="text-xl font-bold">{conversation.participant?.name || 'Unavailable account'}</h2><p>{conversation.participant?.online ? 'Online' : conversation.participant?.lastSeen ? 'Last seen ' + dateTime(conversation.participant.lastSeen) : 'Offline'}</p></header>}</DataState>
+  {history.isPending && <p role="status">Loading messages...</p>}<ErrorNotice error={history.error} retry={() => history.refetch()} />
+  {history.hasNextPage && <Button isLoading={history.isFetchingNextPage} onClick={() => history.fetchNextPage()}>Load earlier messages</Button>}
+  <ol aria-label="Message history" className="space-y-3 max-h-[55vh] overflow-y-auto">{rows.map(row => <li key={row.id || row.clientId} className={'rounded-xl p-3 ' + (row.senderId === user.id ? 'bg-indigo-50 ml-6' : 'neu-inset mr-6')}>
+   <p className="whitespace-pre-wrap break-words">{row.text}</p><AttachmentLinks ids={row.attachments} />
+   <p className="text-xs text-slate-500">{dateTime(row.createdAt)} {row.senderId === user.id && (row.error ? 'Not confirmed' : row.pending ? 'Sending...' : row.readBy?.some(person => person !== user.id) ? 'Read' : row.deliveredTo?.some(person => person !== user.id) ? 'Delivered' : 'Saved')}</p>
+   {row.error && <><ErrorNotice error={row.error} /><Button disabled={send.isPending} onClick={() => transmit({ clientId: row.clientId, text: row.text, attachments: row.attachments })}>Retry message</Button></>}
+  </li>)}</ol>{!history.isPending && !history.isError && !rows.length && <p>No messages yet.</p>}
+  {typing && status === 'online' && <p role="status">Typing...</p>}<ErrorNotice error={receiptError} />
+  <form className="space-y-3" onSubmit={event => { event.preventDefault(); if (!draft.trim() && !attachments.length) return;
+   transmit({ clientId: crypto.randomUUID(), text: draft.trim(), attachments: attachments.map(item => item.id) });
+   setDraft(''); setAttachments([]); socket?.emit('typing:stop', { conversationId: id });
+  }}><Field label="Message" multiline value={draft} maxLength={5000} onChange={event => draftChanged(event.target.value)} onBlur={() => socket?.emit('typing:stop', { conversationId: id })} />
+   <FileUpload scope="conversation" contextId={id} value={attachments} onChange={setAttachments} />
+   <Button type="submit" disabled={send.isPending || (!draft.trim() && !attachments.length)}>Send message</Button>
+  </form>
+ </section>;
+}
+export default function Messages() {
+ const [params, setParams] = useSearchParams(), id = params.get('conversation'), page = Number(params.get('page') || 1);
+ const query = useData(messaging.list({ page })), { status, error } = useSocket();
+ const create = useAction(async form => { const result = await messaging.create(form.get('participantId')); setParams({ conversation: result.data.conversation.id }); });
+ return <section className="space-y-5"><h1 className="text-2xl font-bold">Messages</h1>
+  {status !== 'online' && <p role="status" className="rounded-xl p-3 bg-amber-50">{error || 'Real-time connection offline. Reconnecting; messages use the server API while it is reachable.'}</p>}
+  <div className="grid md:grid-cols-[280px_1fr] gap-6"><aside className={(id ? 'hidden md:block ' : '') + 'space-y-4'}>
+   <details><summary>Start a conversation</summary><form onSubmit={event => { event.preventDefault(); create.mutate(new FormData(event.currentTarget)); }}><Field label="Participant account ID" name="participantId" pattern="[a-fA-F0-9]{24}" required /><Button type="submit" isLoading={create.isPending}>Start conversation</Button><ErrorNotice error={create.error} /></form></details>
+   <Records query={query} page={page} onPage={next => setParams({ ...(id ? { conversation: id } : {}), page: String(next) })}>{item => <button key={item.id} className="block text-left w-full neu-flat rounded-xl p-4" onClick={() => setParams({ conversation: item.id })}><strong>{item.participant?.name || 'Unavailable account'}</strong><p className="truncate">{item.lastMessage?.text}</p><span>{item.unreadCount} unread</span></button>}</Records>
+  </aside>{id ? <Thread key={id} id={id} back={() => setParams({})} /> : <p>Select a conversation to view its history.</p>}</div>
+ </section>;
+}

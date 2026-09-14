@@ -14,7 +14,7 @@ export default function Sidebar({ isMobileOpen, onCloseMobile }) {
     ['Messages', '/dashboard/messages'], ['Notifications', '/dashboard/notifications'],
     ...(freelancer ? [['My services', '/dashboard/services'], ['Portfolio', '/dashboard/portfolio'], ['Earnings & payouts', '/dashboard/earnings'], ['My reviews', '/dashboard/reviews']]
       : [['Saved items', '/dashboard/saved'], ['Browse services', '/services'], ['Find freelancers', '/freelancers']]),
-    ['Profile & security', '/dashboard/profile'], ...(user.isAdmin ? [['Administration', '/dashboard/admin']] : []),
+    ['Profile & security', '/dashboard/profile'],
   ];
   return <>
     {isMobileOpen && <button className="fixed inset-0 bg-slate-900/30 z-40 lg:hidden" aria-label="Close navigation" onClick={onCloseMobile} />}

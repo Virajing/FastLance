@@ -175,11 +175,11 @@ test('conversation creation, unauthorized rooms, real-time delivery, REST fallba
   } finally { a.disconnect(); b.disconnect(); c.disconnect(); }
 });
 test('order creation and transition permissions cannot be forged', async () => {
-  const clientId = crypto.randomUUID();
-  order = expect(await req(client, 'POST', '/orders', { serviceId: service.id, tier: 'basic', clientId,
+  const creationKey = crypto.randomUUID();
+  order = expect(await req(client, 'POST', '/orders', { serviceId: service.id, tier: 'basic', creationKey,
     platformFeeMinor: 0, freelancerAmountMinor: 12500, status: 'completed', paymentStatus: 'paid' }), 201).order;
   assert.equal(order.status, 'pending'); assert.equal(order.platformFeeMinor, 1250); assert.equal(order.freelancerAmountMinor, 11250);
-  assert.equal(expect(await req(client, 'POST', '/orders', { serviceId: service.id, clientId }), 200).order.id, order.id);
+  assert.equal(expect(await req(client, 'POST', '/orders', { serviceId: service.id, creationKey }), 200).order.id, order.id);
   for (const action of ['cancelled', 'accepted', 'deliver', 'complete', 'dispute']) expect(await req(stranger, 'PATCH', '/orders/' + order.id + '/transition', { action }), 403);
   expect(await req(client, 'PATCH', '/orders/' + order.id + '/transition', { action: 'accepted' }), 403);
   expect(await req(worker, 'PATCH', '/orders/' + order.id + '/transition', { action: 'accepted' }), 200);
@@ -243,4 +243,67 @@ test('delivery, revision, completion, review and dashboard ledger values persist
   expect(await req(worker, 'PATCH', '/notifications/read-all'), 200);
   assert.equal((await req(worker, 'GET', '/notifications')).data.unreadCount, 0);
   assert.equal(expect(await req(null, 'GET', '/reviews?serviceId=' + service.id), 200).length, 1);
+});
+
+
+test('creation keys reject mismatched bodies and concurrent retries produce one contract', async () => {
+ const creationKey = crypto.randomUUID();
+ const data = { creationKey, freelancerId: worker.user.id, title: 'Idempotent direct offer', amountMinor: 10001, deliveryDays: 3 };
+ const results = await Promise.all([req(client, 'POST', '/orders', data), req(client, 'POST', '/orders', data)]);
+ assert.deepEqual(results.map(result => result.status).sort(), [200, 201]);
+ assert.equal(results[0].data.order.id, results[1].data.order.id);
+ expect(await req(client, 'POST', '/orders', { ...data, amountMinor: 20000 }), 409);
+ expect(await req(client, 'POST', '/orders', { ...data, creationKey: undefined, clientId: crypto.randomUUID() }), 400);
+});
+
+test('duplicate email is actionable and favorites can query one target', async () => {
+ const duplicate = await app.api('POST', '/auth/register', { data: { name: 'Duplicate account', email: client.email, password: client.password } });
+ assert.equal(duplicate.status, 409); assert.match(duplicate.message, /email already exists/);
+ expect(await req(client, 'POST', '/favorites', { kind: 'freelancer', target: worker.user.id }), 200);
+ const result = await req(client, 'GET', '/favorites?freelancerId=' + worker.user.id);
+ assert.equal(result.data.length, 1); assert.equal(result.data[0].target, worker.user.id);
+});
+
+test('provider order creation recovers a lost response by receipt without another create', async () => {
+ const created = expect(await req(client, 'POST', '/orders', { creationKey: crypto.randomUUID(), freelancerId: worker.user.id, title: 'Reconcile lost provider response', amountMinor: 10000, deliveryDays: 2 }), 201).order;
+ expect(await req(worker, 'PATCH', '/orders/' + created.id + '/transition', { action: 'accepted' }), 200);
+ let providerOrder, count = 0;
+ const createMock = mock.method(razorpay, 'createOrder', async data => { count++; providerOrder = { ...data, id: 'order_Recovered' }; throw new Error('Response lost'); });
+ const findMock = mock.method(razorpay, 'findOrders', async receipt => ({ items: providerOrder.receipt === receipt ? [providerOrder] : [] }));
+ try {
+  expect(await req(client, 'POST', '/orders/' + created.id + '/payment'), 500);
+  const result = expect(await req(client, 'POST', '/orders/' + created.id + '/payment'), 200);
+  assert.equal(result.providerOrderId, 'order_Recovered'); assert.equal(count, 1);
+ } finally { createMock.mock.restore(); findMock.mock.restore(); }
+});
+
+test('refund provider failure can retry the same logical request without unfreezing funds', async () => {
+ const { requestRefund } = await import('../src/services/payment.js');
+ const created = await app.models.Order.create({ title: 'Refund regression', client: client.user.id, freelancer: worker.user.id, status: 'disputed', paymentStatus: 'paid', totalAmountMinor: 10000, platformFeeMinor: 1000, freelancerAmountMinor: 9000 });
+ await app.models.Payment.create({ order: created.id, amountMinor: 10000, status: 'paid', providerPaymentId: 'pay_RefundRegression', providerOrderId: 'order_RefundRegression' });
+ const calls = [];
+ const refundMock = mock.method(razorpay, 'refund', async (id, data) => { calls.push({ id, data }); if (calls.length === 1) throw new Error('Provider timeout'); return {}; });
+ try {
+  await assert.rejects(requestRefund(created.id, { role: 'admin', _id: client.user.id }, app.io));
+  assert.equal((await app.models.Order.findById(created.id)).paymentStatus, 'refund_pending');
+  assert.equal((await requestRefund(created.id, { role: 'admin', _id: client.user.id }, app.io)).status, 'refund_pending');
+  assert.deepEqual(calls[0], calls[1]);
+ } finally { refundMock.mock.restore(); }
+});
+
+test('unreferenced public uploads stay private and orphan cleanup preserves referenced files', async () => {
+ const { storage, canDownload, cleanupOrphans } = await import('../src/services/storage.js');
+ const prior = { STORAGE_PROVIDER: env.STORAGE_PROVIDER, S3_BUCKET: env.S3_BUCKET, S3_REGION: env.S3_REGION, S3_ACCESS_KEY_ID: env.S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY: env.S3_SECRET_ACCESS_KEY };
+ Object.assign(env, { STORAGE_PROVIDER: 's3', S3_BUCKET: 'test-only', S3_REGION: 'test-only', S3_ACCESS_KEY_ID: crypto.randomUUID(), S3_SECRET_ACCESS_KEY: crypto.randomUUID() });
+ const removed = [], removeMock = mock.method(storage, 'remove', async key => removed.push(key));
+ try {
+  const orphan = await app.models.Attachment.create({ owner: worker.user.id, key: crypto.randomUUID(), name: 'orphan.png', mimeType: 'image/png', size: 5, public: true, scope: 'avatar' });
+  assert.equal(await canDownload(orphan, null), false);
+  const attached = await app.models.Attachment.create({ owner: worker.user.id, key: crypto.randomUUID(), name: 'avatar.png', mimeType: 'image/png', size: 5, public: true, scope: 'avatar' });
+  await app.models.User.updateOne({ _id: worker.user.id }, { avatar: 'https://example.test/api/v1/attachments/' + attached.id + '/download' });
+  assert.equal(await canDownload(attached, null), true);
+  const result = await cleanupOrphans({ before: new Date(Date.now() + 1000) });
+  assert.equal(result.removed, 1); assert.deepEqual(removed, [orphan.key]);
+  assert.equal(await app.models.Attachment.countDocuments({ _id: attached.id }), 1);
+ } finally { removeMock.mock.restore(); Object.assign(env, prior); }
 });

@@ -1,0 +1,63 @@
+import { test, expect } from '@playwright/test';
+test('prepared paid contract supports browser delivery, revision, completion, review and persistent profile/portfolio editing', async ({ browser }) => {
+  const a = await browser.newContext(), b = await browser.newContext();
+  const client = await a.newPage(), worker = await b.newPage(), failures = [];
+  for (const page of [client, worker]) page.on('pageerror', error => failures.push(error.message));
+  async function login(page, email) {
+    await page.goto('/dashboard/projects/' + process.env.TEST_DELIVERY_ORDER);
+    await expect(page).toHaveURL(/login/);
+    await page.getByLabel('Email', { exact: true }).fill(email);
+    await page.getByLabel('Password', { exact: true }).fill(process.env.TEST_DELIVERY_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp('/dashboard/projects/' + process.env.TEST_DELIVERY_ORDER));
+  }
+  try {
+    await login(client, process.env.TEST_DELIVERY_CLIENT);
+    await login(worker, process.env.TEST_DELIVERY_WORKER);
+    await worker.getByLabel('Delivery notes').fill('First browser delivery with source notes.');
+    await worker.getByRole('button', { name: 'Submit milestone', exact: true }).click();
+    await expect(worker.getByText('First browser delivery with source notes.', { exact: true })).toBeVisible();
+    await client.reload();
+    await client.getByLabel('Revision request').fill('Please improve keyboard navigation.');
+    await client.getByRole('button', { name: 'Request revision', exact: true }).click();
+    await expect(client.getByText(/revision requested/).first()).toBeVisible();
+    await worker.reload();
+    await worker.getByLabel('Delivery notes').fill('Keyboard navigation improved and checked.');
+    await worker.getByRole('button', { name: 'Resubmit work', exact: true }).click();
+    await expect(worker.getByText('Keyboard navigation improved and checked.', { exact: true })).toBeVisible();
+    await client.reload();
+    await client.getByRole('button', { name: 'Approve milestone', exact: true }).click();
+    await client.getByRole('button', { name: 'Complete contract', exact: true }).click();
+    await client.getByLabel('Review', { exact: true }).fill('Verified browser review after revision.');
+    await client.getByRole('button', { name: 'Submit verified review' }).click();
+    await expect(client.getByText(/Verified review: 5\/5/)).toBeVisible();
+    await client.reload();
+    await expect(client.getByRole('button', { name: 'Submit verified review' })).toHaveCount(0);
+    await worker.goto('/dashboard/earnings');
+    await expect(worker.getByText(/Available payable/)).toContainText('112.95');
+    await expect(worker.getByText(/Payouts not configured/)).toBeVisible();
+    await worker.goto('/dashboard/profile');
+    await worker.getByLabel('Professional title').fill('Updated delivery professional');
+    await worker.getByLabel('Availability', { exact: true }).selectOption('part_time');
+    await worker.getByRole('button', { name: 'Save profile', exact: true }).click();
+    await expect(worker.getByLabel('Professional title')).toHaveValue('Updated delivery professional');
+    await worker.reload();
+    await expect(worker.getByLabel('Professional title')).toHaveValue('Updated delivery professional');
+    await expect(worker.getByLabel('Availability', { exact: true })).toHaveValue('part_time');
+    await worker.goto('/dashboard/portfolio');
+    await worker.getByRole('button', { name: 'Add portfolio item' }).click();
+    await worker.getByLabel('Portfolio title').fill('Browser portfolio work');
+    await worker.getByLabel('Description', { exact: true }).fill('A persisted portfolio entry.');
+    await worker.getByRole('button', { name: 'Save portfolio item' }).click();
+    await expect(worker.getByRole('heading', { name: 'Browser portfolio work' })).toBeVisible();
+    await worker.reload();
+    await expect(worker.getByRole('heading', { name: 'Browser portfolio work' })).toBeVisible();
+    await worker.getByRole('button', { name: 'Edit item' }).click();
+    await worker.getByLabel('Portfolio title').fill('Updated browser portfolio work');
+    await worker.getByRole('button', { name: 'Save portfolio item' }).click();
+    await expect(worker.getByRole('heading', { name: 'Updated browser portfolio work' })).toBeVisible();
+    await worker.getByRole('button', { name: 'Delete item' }).click();
+    await expect(worker.getByText('No portfolio items yet.')).toBeVisible();
+    expect(failures).toEqual([]);
+  } finally { await a.close(); await b.close(); }
+});

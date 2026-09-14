@@ -48,7 +48,14 @@ export const refresh = asyncHandler(async (req, res) => {
 });
 export const logout = asyncHandler(async (req, res) => {
   const token = req.cookies[env.COOKIE_NAME];
-  if (typeof token === 'string' && token.length <= 200) await Session.deleteOne({ tokenHash: hashToken(token) });
+  if (typeof token === 'string' && token.length <= 200) {
+    const session = await Session.findOneAndDelete({ tokenHash: hashToken(token) });
+    if (session) {
+      for (const socket of req.app.get('io')?.sockets.sockets.values() || []) {
+        if (socket.data.payload.sid === session.id) { socket.emit('auth:revoked'); socket.disconnect(true); }
+      }
+    }
+  }
   res.clearCookie(env.COOKIE_NAME, { ...refreshCookie, maxAge: undefined });
   ok(res, {}, 'Logged out');
 });

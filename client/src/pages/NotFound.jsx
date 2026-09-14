@@ -1,8 +1,7 @@
-import React from 'react';
 import { Link } from 'react-router-dom';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import { Home, Compass, Users, ArrowLeft } from 'lucide-react';
+import { Home, Compass, Users } from 'lucide-react';
 
 export const NotFound = () => {
   return (
@@ -20,7 +19,7 @@ export const NotFound = () => {
             Lost in Cyberspace?
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 mt-2 leading-relaxed">
-            The page you're searching for doesn't exist, has been moved to another escrow sprint, or is undergoing security maintenance.
+            The page you're searching for doesn't exist, or has moved.
           </p>
         </div>
 

@@ -24,7 +24,7 @@ async function providerRequest(path, options = {}) {
   try {
     response = await fetch('https://api.razorpay.com/v1' + path, {
       ...options, signal: AbortSignal.timeout(15000),
-      headers: { Authorization: 'Basic ' + Buffer.from(env.RAZORPAY_KEY_ID + ':' + env.RAZORPAY_KEY_SECRET).toString('base64'), 'Content-Type': 'application/json' },
+      headers: { ...options.headers, Authorization: 'Basic ' + Buffer.from(env.RAZORPAY_KEY_ID + ':' + env.RAZORPAY_KEY_SECRET).toString('base64'), 'Content-Type': 'application/json' },
     });
   } catch { throw new ApiError(502, 'Could not reach Razorpay. Payment confirmation may still arrive by webhook.'); }
   if (!response.ok) throw new ApiError(502, 'Razorpay could not process this request. Check provider configuration and payment status.');
@@ -32,8 +32,11 @@ async function providerRequest(path, options = {}) {
 }
 export const razorpay = {
   createOrder: data => providerRequest('/orders', { method: 'POST', body: JSON.stringify(data) }),
+  findOrders: receipt => providerRequest('/orders?receipt=' + encodeURIComponent(receipt) + '&count=100'),
   fetchPayment: id => providerRequest('/payments/' + encodeURIComponent(id)),
-  refund: (id, data) => providerRequest('/payments/' + encodeURIComponent(id) + '/refund', { method: 'POST', body: JSON.stringify(data) }),
+  refund: (id, data) => providerRequest('/payments/' + encodeURIComponent(id) + '/refund', {
+    method: 'POST', headers: { 'X-Refund-Idempotency': data.receipt }, body: JSON.stringify(data),
+  }),
 };
 export async function createPayment(user, orderId, io) {
   requirePayments();
@@ -67,7 +70,18 @@ export async function createPayment(user, orderId, io) {
       payment.providerOrderId = providerOrder.id; payment.status = 'created'; await payment.save();
     }
   }
-  if (!payment?.providerOrderId) throw new ApiError(409, 'Payment order creation is being reconciled. Contact support before retrying.');
+  if (payment && !payment.providerOrderId) {
+    // A lost create response must not trigger another provider order. Recover by the persisted receipt.
+    const result = await razorpay.findOrders(payment.id);
+    if (!Array.isArray(result.items)) throw new ApiError(502, 'Razorpay returned an unreadable reconciliation response.');
+    const matches = result.items.filter(item => item.receipt === payment.id);
+    if (matches.length === 1 && matches[0].amount === payment.amountMinor && matches[0].currency === 'INR'
+      && matches[0].notes?.fastlance_order_id === order.id) {
+      payment = await Payment.findOneAndUpdate({ _id: payment._id, providerOrderId: { $exists: false }, status: 'creating' },
+        { providerOrderId: matches[0].id, status: 'created' }, { new: true }) || await Payment.findById(payment._id);
+    }
+  }
+  if (!payment?.providerOrderId) throw new ApiError(409, 'No unique provider order could be reconciled. Contact support to check the persisted receipt before another payment attempt.', 'PAYMENT_RECONCILIATION_REQUIRED');
   if (!['created', 'failed'].includes(payment.status)) throw new ApiError(409, 'Payment was already processed');
   return { keyId: env.RAZORPAY_KEY_ID, providerOrderId: payment.providerOrderId, amountMinor: payment.amountMinor, currency: 'INR', orderId: order.id };
 }
@@ -175,6 +189,8 @@ export async function requestRefund(orderId, user, io) {
   requirePayments();
   if (user.role !== 'admin') throw new ApiError(403, 'Only an administrator may initiate a refund');
   const payment = await transaction(async context => {
+    const pending = await Payment.findOne({ order: orderId, status: 'refund_pending' }).session(context.session);
+    if (pending) return pending;
     const order = await Order.findOne({ _id: orderId, status: 'disputed', paymentStatus: 'paid' }).session(context.session);
     if (!order) throw new ApiError(409, 'A paid disputed contract is required');
     const payment = await Payment.findOneAndUpdate({ order: order._id, status: 'paid' },
@@ -185,6 +201,7 @@ export async function requestRefund(orderId, user, io) {
     emitAfter(context, ['user:' + order.client, 'user:' + order.freelancer], 'dashboard:updated', {});
     return payment;
   }, io);
+  // The same persisted receipt is also the provider idempotency key on every retry.
   await razorpay.refund(payment.providerPaymentId, { amount: payment.amountMinor, receipt: payment.id, notes: { order: orderId } });
   return { status: 'refund_pending', message: 'Refund requested. Awaiting provider confirmation.' };
 }

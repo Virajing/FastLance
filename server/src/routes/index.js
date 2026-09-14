@@ -84,7 +84,7 @@ r.post('/proposals/:id/decision', protect, client, body(z.object({ action: z.enu
 r.get('/orders', protect, orders.orders);
 r.get('/orders/:id', protect, orders.detail);
 const order = z.object({
-  clientId: z.string().uuid(), serviceId: id.optional(), tier: z.enum(['basic', 'standard', 'premium']).optional(),
+  creationKey: z.string().uuid(), serviceId: id.optional(), tier: z.enum(['basic', 'standard', 'premium']).optional(),
   freelancerId: id.optional(), title: text(3, 150).optional(), amountMinor: money.optional(),
   deliveryDays: z.number().int().min(1).max(365).optional(), requirements: text(0, 5000).default(''),
   milestones: z.array(z.object({ title: text(3, 150), amountMinor: money, deadline: z.coerce.date().optional() })).max(20).optional(),
@@ -119,7 +119,10 @@ r.get('/earnings', protect, freelancer, dashboard.earnings);
 r.get('/payouts', protect, freelancer, dashboard.payouts);
 
 const uploadFile = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10485760, files: 1, fields: 2 } });
-r.post('/attachments', protect, (_req, _res, next) => { try { requireStorage(); next(); } catch (error) { next(error); } },
+const uploadLimit = rateLimit({ windowMs: 60 * 60000, limit: 30, keyGenerator: req => req.user.id,
+  standardHeaders: 'draft-8', legacyHeaders: false,
+  message: { success: false, code: 'UPLOAD_RATE_LIMIT', message: 'Upload limit reached. Try again in an hour.' } });
+r.post('/attachments', protect, uploadLimit, (_req, _res, next) => { try { requireStorage(); next(); } catch (error) { next(error); } },
   uploadFile.single('file'), body(z.object({ scope: z.enum(['conversation', 'order', 'job', 'avatar', 'portfolio', 'service']), contextId: id.optional() })),
   asyncHandler(async (req, res) => {
     const attachment = await upload(req.user, req.file, req.validated.body.scope, req.validated.body.contextId);

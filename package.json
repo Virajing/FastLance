@@ -4,9 +4,17 @@
   "scripts": {
     "dev": "concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
     "start": "npm run start --prefix server",
-    "test": "npm run test --prefix server",
+    "test": "npm run test:server && npm run test:client",
     "seed": "npm run seed --prefix server",
-    "build": "npm run build --prefix client"
+    "build": "npm run build --prefix client",
+    "install:all": "npm ci && npm ci --prefix server && npm ci --prefix client",
+    "lint": "npm run lint --prefix client",
+    "test:server": "npm test --prefix server",
+    "test:client": "npm test --prefix client",
+    "test:e2e": "node scripts/test-e2e.mjs",
+    "secret-scan": "node scripts/secret-scan.mjs --history",
+    "verify": "node scripts/verify.mjs",
+    "check:repository": "node scripts/repository-check.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

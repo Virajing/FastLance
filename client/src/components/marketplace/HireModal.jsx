@@ -1,130 +1,33 @@
-import React, { useState } from 'react';
+import { useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/auth';
+import { useAction } from '../../hooks/useData';
+import { orders } from '../../services';
+import { money, toMinor } from '../../lib/format';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
-import Avatar from '../ui/Avatar';
-import { useToast } from '../../context/ToastContext';
-import { api } from '../../lib/api';
-import { ShieldCheck, CheckCircle2, Clock, Sparkles } from 'lucide-react';
-
-export const HireModal = ({ isOpen, onClose, service, tierKey, packageData }) => {
-  const [notes, setNotes] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
-  const { addToast } = useToast();
-  const navigate = useNavigate();
-
-  if (!service || !packageData) return null;
-
-  const handleConfirmHire = async () => {
-    setIsProcessing(true);
-    try {
-      await api.post('/orders', { serviceId: service.id, tier: tierKey, requirements: notes });
-      setIsProcessing(false);
-      onClose();
-      addToast(`Order placed for ${service.title}. Awaiting freelancer acceptance.`, 'success');
-      navigate('/dashboard/projects');
-    } catch (error) {
-      setIsProcessing(false);
-      addToast(error.message, 'error');
-    }
-  };
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title="Secure Escrow Checkout"
-      subtitle="Funds are held securely and only released when you approve the milestone."
-      maxWidth="max-w-md"
-      footer={
-        <>
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={isProcessing}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            size="md"
-            onClick={handleConfirmHire}
-            isLoading={isProcessing}
-            rightIcon={<Sparkles className="w-4 h-4" />}
-          >
-            Fund Escrow (${packageData.price})
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-5">
-        {/* Freelancer & Service Summary */}
-        <div className="p-4 rounded-xl neu-sm bg-white/70 border border-white flex items-center gap-3">
-          <Avatar
-            src={service.freelancerAvatar}
-            name={service.freelancerName}
-            size="md"
-            status="online"
-          />
-          <div>
-            <h4 className="text-xs font-bold text-slate-900 line-clamp-1">{service.title}</h4>
-            <p className="text-[11px] text-slate-500">By {service.freelancerName}</p>
-          </div>
-        </div>
-
-        {/* Selected Package Details */}
-        <div className="p-4 rounded-xl neu-inset space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-indigo-700 capitalize">{tierKey} Tier: {packageData.name}</span>
-            <span className="text-sm font-black text-slate-900">${packageData.price}</span>
-          </div>
-          <p className="text-xs text-slate-500 leading-tight">{packageData.description}</p>
-          <div className="flex items-center gap-4 text-xs font-medium text-slate-600 pt-1 border-t border-slate-200/50">
-            <span className="flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5 text-indigo-600" />
-              {packageData.deliveryDays} Days Turnaround
-            </span>
-            <span className="flex items-center gap-1">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              {packageData.revisions} Revisions
-            </span>
-          </div>
-        </div>
-
-        {/* Requirements brief */}
-        <div>
-          <label className="text-xs font-bold uppercase tracking-wider text-slate-700 block mb-1.5">
-            Project Scope or Requirements (Optional)
-          </label>
-          <textarea
-            rows="3"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Share your Figma link, API specs, or project goals..."
-            className="w-full neu-inset rounded-xl p-3 text-xs text-slate-800 placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-500/30 resize-none"
-          />
-        </div>
-
-        {/* Payment Summary */}
-        <div className="space-y-1.5 pt-2 text-xs">
-          <div className="flex justify-between text-slate-600">
-            <span>Subtotal</span>
-            <span>${packageData.price}.00</span>
-          </div>
-          <div className="flex justify-between text-slate-600">
-            <span>Escrow Protection Fee</span>
-            <span className="text-emerald-700 font-bold">$0.00 (Waived)</span>
-          </div>
-          <div className="flex justify-between font-black text-slate-900 pt-2 border-t border-slate-200/60 text-sm">
-            <span>Total Due Today</span>
-            <span>${packageData.price}.00 USD</span>
-          </div>
-        </div>
-
-        {/* Trust badge */}
-        <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-50 text-emerald-800 text-[11px] font-medium border border-emerald-200/60">
-          <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span>FastLance 100% money-back guarantee if deliverables do not match agreed specifications.</span>
-        </div>
-      </div>
-    </Modal>
-  );
-};
-
-export default HireModal;
+import Field from '../ui/Field';
+import { ErrorNotice } from '../ui/DataState';
+export default function HireModal({ isOpen, onClose, service, tierKey, packageData, freelancerId }) {
+ const { user } = useAuth(), navigate = useNavigate(), submission = useRef(null);
+ const action = useAction(async form => {
+  const data = service ? { serviceId: service.id, tier: tierKey, requirements: form.get('requirements') }
+   : { freelancerId, title: form.get('title'), amountMinor: toMinor(form.get('amount')), deliveryDays: Number(form.get('deliveryDays')), requirements: form.get('requirements') };
+  const fingerprint = JSON.stringify(data);
+  if (submission.current?.fingerprint !== fingerprint) submission.current = { fingerprint, creationKey: crypto.randomUUID() };
+  const result = await orders.create({ ...data, creationKey: submission.current.creationKey });
+  submission.current = null; onClose(); navigate('/dashboard/projects/' + result.data.order.id);
+ });
+ return <Modal isOpen={isOpen} onClose={onClose} title="Send contract offer">
+  {user?.activeRole !== 'client' ? <p>Sign in and switch to client mode to send an offer.</p> : <form className="space-y-4" onSubmit={event => { event.preventDefault(); action.mutate(new FormData(event.currentTarget)); }}>
+   {service ? <p>{service.title} &middot; {packageData?.name} &middot; {money(packageData?.priceMinor)}</p> : <>
+    <Field label="Contract title" name="title" minLength={3} maxLength={150} required />
+    <Field label="Amount (INR)" name="amount" type="number" min="1" step="0.01" required />
+    <Field label="Delivery days" name="deliveryDays" type="number" min="1" max="365" required />
+   </>}
+   <Field label="Requirements" name="requirements" multiline maxLength={5000} />
+   <p className="text-sm">The freelancer must accept before payment. FastLance records a 10% commission and 90% freelancer payable.</p>
+   <ErrorNotice error={action.error} /><Button type="submit" variant="primary" isLoading={action.isPending}>Send offer</Button>
+  </form>}
+ </Modal>;
+}

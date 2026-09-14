@@ -7,6 +7,7 @@ import Order from '../models/Order.js';
 import Favorite from '../models/Favorite.js';
 import { ApiError, asyncHandler, ok, page, pagination, pageMeta, escapeRegex, sameId } from '../utils/api.js';
 import { verifyAttachments } from '../services/storage.js';
+import { transaction } from '../services/transaction.js';
 
 export const freelancerFilter = { accountStatus: 'active', $or: [{ roles: 'freelancer' }, { roles: { $exists: false }, role: 'freelancer' }] };
 export const publicUser = user => ({
@@ -14,7 +15,7 @@ export const publicUser = user => ({
   bio: user.bio, location: user.location, skills: user.skills, serviceCategories: user.serviceCategories,
   hourlyRateMinor: user.hourlyRateMinor, availability: user.availability,
   verified: user.verificationStatus === 'verified', rating: user.averageRating, reviewsCount: user.reviewCount,
-  portfolio: user.portfolio, createdAt: user.createdAt,
+  portfolio: user.portfolio, completedProjects: user.completedProjects, createdAt: user.createdAt,
 });
 export const serviceView = service => {
   const value = service.toJSON(), owner = service.freelancer;
@@ -53,7 +54,7 @@ export const services = asyncHandler(async (req, res) => {
   const query = req.validated.query, paging = pagination(query);
   const filter = req.user && query.mine === 'true' ? { freelancer: req.user._id } : { ...publicServices };
   if (!filter.freelancer) filter.freelancer = { $in: await User.find(freelancerFilter).distinct('_id') };
-  if (query.freelancerId) filter.freelancer = query.freelancerId;
+  if (query.freelancerId) filter.$and = [{ freelancer: query.freelancerId }];
   if (query.category) filter.category = query.category;
   if (query.minRating) filter.rating = { $gte: query.minRating };
   if (query.maxPrice !== undefined) filter['packages.basic.priceMinor'] = { $gte: 100, $lte: query.maxPrice };
@@ -90,8 +91,12 @@ export const updateService = asyncHandler(async (req, res) => {
   ok(res, { service: serviceView(await row.populate('freelancer', 'name avatar verificationStatus')) });
 });
 export const deleteService = asyncHandler(async (req, res) => {
-  const result = await Service.findOneAndDelete({ _id: req.params.id, freelancer: req.user._id });
-  if (!result) throw new ApiError(404, 'Service not found or not owned by you');
+  await transaction(async context => {
+    const result = await Service.findOneAndUpdate({ _id: req.params.id, freelancer: req.user._id }, { $inc: { __v: 1 } }, { new: true, session: context.session });
+    if (!result) throw new ApiError(404, 'Service not found or not owned by you');
+    if (await Order.exists({ service: result._id }).session(context.session)) throw new ApiError(409, 'Existing contracts reference this service. Unpublish it to stop new orders.');
+    await result.deleteOne({ session: context.session });
+  }, req.io);
   ok(res);
 });
 export const portfolio = asyncHandler(async (req, res) => {
@@ -114,7 +119,7 @@ export const portfolio = asyncHandler(async (req, res) => {
 export const reviews = asyncHandler(async (req, res) => {
   const query = req.validated.query, paging = pagination(query), filter = { verified: true };
   if (query.serviceId) filter.service = query.serviceId;
-  if (query.freelancerId) filter.freelancer = query.freelancerId;
+  if (query.freelancerId) filter.$and = [{ freelancer: query.freelancerId }];
   if (query.rating) filter.rating = query.rating;
   const [rows, total] = await Promise.all([
     Review.find(filter).populate('client', 'name avatar').sort({ createdAt: -1, _id: -1 }).skip(paging.skip).limit(paging.limit),
@@ -124,9 +129,12 @@ export const reviews = asyncHandler(async (req, res) => {
 });
 export const favorites = asyncHandler(async (req, res) => {
   const paging = pagination(req.validated.query);
+  const filter = { user: req.user._id };
+  if (req.validated.query.serviceId) Object.assign(filter, { kind: 'service', target: req.validated.query.serviceId });
+  if (req.validated.query.freelancerId) Object.assign(filter, { kind: 'freelancer', target: req.validated.query.freelancerId });
   const [rows, total] = await Promise.all([
-    Favorite.find({ user: req.user._id }).sort('-createdAt').skip(paging.skip).limit(paging.limit),
-    Favorite.countDocuments({ user: req.user._id }),
+    Favorite.find(filter).sort('-createdAt').skip(paging.skip).limit(paging.limit),
+    Favorite.countDocuments(filter),
   ]);
   const data = [];
   for (const row of rows) {
